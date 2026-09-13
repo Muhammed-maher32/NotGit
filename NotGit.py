@@ -15,6 +15,11 @@ import re
 import sys
 import zlib
 
+############################
+#Abstract
+###########################
+
+
 
 class GitRepository(object):
     """A git repository"""
@@ -47,6 +52,29 @@ class GitRepository(object):
                     f"Unsupported repositoryformatversion: {vers}"
                 )
 
+
+class GitObject(object):
+    def __init__(self,data=None):
+        if data != None:
+            self.deserialize(data)
+        else:
+            self.init()    
+
+    def serialize(self,repo):
+        raise Exception("Not implemneted")
+    def deserialize(self,data):
+        raise Exception("Not implemneted")
+
+    def init(self):
+        pass         
+
+class GitBlob(GitObject):
+    fmt = b'blob'
+    def serialize(self):
+        return self.blobdata
+    def deserialize(self,data):
+        self.blobdata=data
+############################
 
 def repo_path(repo, *path):
     """Return a path under the repository's .git directory."""
@@ -148,7 +176,51 @@ def repo_find(path=".", required=True):
 
     return repo_find(parent, required)
 
+def object_read(repo,sha):
+    #Return the object that have this SHA from the repo
+    path = repo_file(repo,"objects",sha[0:2],sha[2:])
+    if not os.path.isfile(path):
+        return None
+    with open(path,"rb") as f:
+        raw = zlib.decompress(f.read())
+        #raw now have bytes
+        #b is python syntax means that: anything between ' ' is bytes
+        x = raw.find(b' ')  #finds first sapce
+        fmt= raw[0:x]   #return the header
 
+        y=raw.find(b'\x00',x) #find null space after x, returns its position
+        size = int(raw[x:y].decode("ascii")) #decode return a string
+        if size != len(raw)-y-1: #-1 points to the position of the null itself.
+            raise Exception(f"Malformed object {sha}: bad length")
+
+        match fmt:
+            case b'commit' : c=GitCommit
+            case b'tree'   : c=GitTree
+            case b'tag'    : c=GitTag
+            case b'blob'   : c=GitBlob
+            case _:
+                raise Exception(f"Unknown type {fmt.decode('ascii')} for object {sha}")
+
+        # Call constructor and return object
+        return c(raw[y+1:])
+
+def object_write(obj, repo=None):
+    # Serialize object data
+    data = obj.serialize()
+    # Add header
+    result = obj.fmt + b' ' + str(len(data)).encode() + b'\x00' + data
+    # Compute hash
+    sha = hashlib.sha1(result).hexdigest()
+
+    if repo:
+        # Compute path
+        path=repo_file(repo, "objects", sha[0:2], sha[2:], mkdir=True)
+
+        if not os.path.exists(path):
+            with open(path, 'wb') as f:
+                # Compress and write
+                f.write(zlib.compress(result))
+    return sha    
 # =========================
 # CLI
 # =========================
@@ -178,7 +250,9 @@ argsp.add_argument(
     help="Where to create the repository."
 )
 
-
+###########################
+#Brigde
+###########################
 def cmd_init(args):
     repo_create(args.path)
 
